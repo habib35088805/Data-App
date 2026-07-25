@@ -1,0 +1,131 @@
+// Prisma Schema for Nigerian Data & Airtime VTU Platform
+// Database Provider: PostgreSQL (Compatible with MySQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("user_status")
+}
+
+enum LedgerType {
+  CREDIT
+  DEBIT
+
+  @@map("ledger_type")
+}
+
+enum ServiceType {
+  AIRTIME
+  DATA
+
+  @@map("service_type")
+}
+
+enum NetworkEnum {
+  MTN
+  AIRTEL
+  GLO
+  NINE_MOBILE
+
+  @@map("network_enum")
+}
+
+enum ProviderEnum {
+  INLOMAX
+  HUSMODATA
+
+  @@map("provider_enum")
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+
+  @@map("transaction_status")
+}
+
+model User {
+  id                 String       @id @default(uuid())
+  fullName           String       @map("full_name")
+  email              String       @unique
+  phone              String       @unique
+  passwordHash       String       @map("password_hash")
+  transactionPinHash String       @map("transaction_pin_hash")
+  biometricEnabled   Boolean      @default(false) @map("biometric_enabled")
+  status             UserStatus   @default(ACTIVE)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  wallet       Wallet?
+  transactions Transaction[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id                   String        @id @default(uuid())
+  userId               String        @unique @map("user_id")
+  balance              Decimal       @default(0.00) @db.Decimal(12, 2)
+  virtualAccountNumber String?       @map("virtual_account_number")
+  virtualBankName      String?       @map("virtual_bank_name")
+  virtualAccountName   String?       @map("virtual_account_name")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries LedgerEntry[]
+
+  @@map("wallets")
+}
+
+model LedgerEntry {
+  id            String     @id @default(uuid())
+  walletId      String     @map("wallet_id")
+  type          LedgerType
+  amount        Decimal    @db.Decimal(12, 2)
+  balanceBefore Decimal    @map("balance_before") @db.Decimal(12, 2)
+  balanceAfter  Decimal    @map("balance_after") @db.Decimal(12, 2)
+  reference     String     @unique
+  description   String
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([reference])
+  @@map("ledger_entries")
+}
+
+model Transaction {
+  id                String            @id @default(uuid())
+  userId            String            @map("user_id")
+  reference         String            @unique
+  serviceType       ServiceType       @map("service_type")
+  network           NetworkEnum
+  phoneNumber       String            @map("phone_number")
+  planId            String?           @map("plan_id")
+  amount            Decimal           @db.Decimal(12, 2)
+  providerUsed      ProviderEnum      @map("provider_used")
+  providerReference String?           @map("provider_reference")
+  status            TransactionStatus @default(PENDING)
+  retriesCount      Int               @default(0) @map("retries_count")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([reference])
+  @@map("transactions")
+}
