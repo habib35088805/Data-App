@@ -3,20 +3,28 @@ import { WalletService } from './services/wallet.service';
 import { StrowalletService } from './services/strowallet.service';
 import { VtuDispatcherService } from './services/vtuDispatcher.service';
 import webhookRoutes from './routes/webhook.routes';
+import adminRoutes from './routes/admin.routes';
 import { WalletBaseError } from './errors/wallet.errors';
 import { prisma } from './config/db';
 
 const app = express();
 const vtuDispatcher = new VtuDispatcherService();
 
+// 1. Webhook routes (custom raw body parser for HMAC verification)
 app.use('/api/v1/webhooks', webhookRoutes);
+
+// 2. Admin Management REST APIs
+app.use('/api/v1/admin', adminRoutes);
+
+// Standard JSON Parser
 app.use(express.json());
 
+// Health Check Endpoint
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'Nigerian VTU Platform API & Multi-Provider Dispatcher', timestamp: new Date() });
+  res.json({ status: 'ok', service: 'Nigerian VTU Platform API, Dispatcher & Admin Engine', timestamp: new Date() });
 });
 
-// User Onboarding Endpoint (Creates User & Dedicated Strowallet Virtual Bank Account)
+// User Onboarding Endpoint
 app.post('/api/v1/users/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { fullName, email, phone, password, transactionPin, bvn, nin } = req.body;
@@ -67,7 +75,7 @@ app.post('/api/v1/users/register', async (req: Request, res: Response, next: Nex
   }
 });
 
-// VTU Resilient Multi-Provider Dispatch Purchase Endpoint
+// VTU Purchase Dispatch Endpoint
 app.post('/api/v1/vtu/dispatcher/purchase', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId, transactionPin, serviceType, network, phoneNumber, amount, planId, reference } = req.body;
@@ -108,51 +116,7 @@ app.get('/api/v1/wallet/:userId', async (req: Request, res: Response, next: Next
   }
 });
 
-// Manual Wallet Credit Endpoint
-app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { userId, amount, reference, description } = req.body;
-
-    if (!userId || !amount || !reference) {
-      return res.status(400).json({
-        success: false,
-        error: 'MissingRequiredFields',
-        message: 'userId, amount, and reference are required fields.',
-      });
-    }
-
-    const result = await WalletService.credit({
-      userId,
-      amount: Number(amount),
-      reference,
-      description: description || 'Wallet Funding',
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: 'Wallet funded successfully.',
-      data: result,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Ledger Entries Endpoint
-app.get('/api/v1/wallet/:walletId/ledger', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { walletId } = req.params;
-    const limit = Number(req.query.limit) || 20;
-    const offset = Number(req.query.offset) || 0;
-
-    const entries = await WalletService.getLedgerHistory(walletId, limit, offset);
-    res.json({ success: true, data: entries });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Centralized Structured Error Handling Middleware
+// Centralized Error Middleware
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof WalletBaseError) {
     return res.status(err.statusCode).json({
@@ -163,11 +127,11 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  if (err.message && err.message.startsWith('INVALID_TRANSACTION_PIN')) {
-    return res.status(401).json({
+  if (err.message && err.message.startsWith('ADMIN_REASON_REQUIRED')) {
+    return res.status(400).json({
       success: false,
-      error: 'INVALID_TRANSACTION_PIN',
-      message: 'The transaction PIN provided is incorrect.',
+      error: 'ADMIN_REASON_REQUIRED',
+      message: err.message,
     });
   }
 
@@ -183,7 +147,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({
     success: false,
     error: 'INTERNAL_SERVER_ERROR',
-    message: err.message || 'An unexpected database or server error occurred.',
+    message: err.message || 'An unexpected server error occurred.',
   });
 });
 
