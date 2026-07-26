@@ -1,19 +1,22 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { WalletService } from './services/wallet';
+import { WalletService } from './services/wallet.service';
 import { StrowalletService } from './services/strowallet.service';
+import { VtuDispatcherService } from './services/vtuDispatcher.service';
 import webhookRoutes from './routes/webhook.routes';
 import { WalletBaseError } from './errors/wallet.errors';
 import { prisma } from './config/db';
 
 const app = express();
+const vtuDispatcher = new VtuDispatcherService();
 
 app.use('/api/v1/webhooks', webhookRoutes);
 app.use(express.json());
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'Nigerian VTU Platform API & Strowallet Engine', timestamp: new Date() });
+  res.json({ status: 'ok', service: 'Nigerian VTU Platform API & Multi-Provider Dispatcher', timestamp: new Date() });
 });
 
+// User Onboarding Endpoint (Creates User & Dedicated Strowallet Virtual Bank Account)
 app.post('/api/v1/users/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { fullName, email, phone, password, transactionPin, bvn, nin } = req.body;
@@ -64,6 +67,37 @@ app.post('/api/v1/users/register', async (req: Request, res: Response, next: Nex
   }
 });
 
+// VTU Resilient Multi-Provider Dispatch Purchase Endpoint
+app.post('/api/v1/vtu/dispatcher/purchase', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { userId, transactionPin, serviceType, network, phoneNumber, amount, planId, reference } = req.body;
+
+    if (!userId || !transactionPin || !serviceType || !network || !phoneNumber || !amount || !reference) {
+      return res.status(400).json({
+        success: false,
+        error: 'MissingRequiredFields',
+        message: 'userId, transactionPin, serviceType, network, phoneNumber, amount, and reference are required.',
+      });
+    }
+
+    const result = await vtuDispatcher.processPurchase({
+      userId,
+      transactionPin,
+      serviceType,
+      network,
+      phoneNumber,
+      amount: Number(amount),
+      planId,
+      reference,
+    });
+
+    return res.status(result.success ? 200 : 400).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Fetch User Wallet & Balance
 app.get('/api/v1/wallet/:userId', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId } = req.params;
@@ -74,6 +108,7 @@ app.get('/api/v1/wallet/:userId', async (req: Request, res: Response, next: Next
   }
 });
 
+// Manual Wallet Credit Endpoint
 app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId, amount, reference, description } = req.body;
@@ -103,52 +138,7 @@ app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: Next
   }
 });
 
-app.post('/api/v1/wallet/debit', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { userId, amount, reference, description, serviceType, network, phoneNumber, planId, providerUsed } = req.body;
-
-    if (!userId || !amount || !reference || !phoneNumber || !serviceType || !network) {
-      return res.status(400).json({
-        success: false,
-        error: 'MissingRequiredFields',
-        message: 'userId, amount, reference, phoneNumber, serviceType, and network are required fields.',
-      });
-    }
-
-    const debitResult = await WalletService.debit({
-      userId,
-      amount: Number(amount),
-      reference,
-      description: description || `VTU ${serviceType} purchase for ${phoneNumber}`,
-    });
-
-    const vtuTx = await prisma.transaction.create({
-      data: {
-        userId,
-        reference,
-        serviceType,
-        network,
-        phoneNumber,
-        planId,
-        amount: Number(amount),
-        providerUsed: providerUsed || 'INLOMAX',
-        status: 'SUCCESS',
-      },
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: 'VTU transaction processed successfully.',
-      data: {
-        wallet: debitResult,
-        transaction: vtuTx,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
+// Ledger Entries Endpoint
 app.get('/api/v1/wallet/:walletId/ledger', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { walletId } = req.params;
@@ -162,6 +152,7 @@ app.get('/api/v1/wallet/:walletId/ledger', async (req: Request, res: Response, n
   }
 });
 
+// Centralized Structured Error Handling Middleware
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof WalletBaseError) {
     return res.status(err.statusCode).json({
@@ -169,6 +160,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       error: err.errorCode,
       message: err.message,
       details: err.toJSON(),
+    });
+  }
+
+  if (err.message && err.message.startsWith('INVALID_TRANSACTION_PIN')) {
+    return res.status(401).json({
+      success: false,
+      error: 'INVALID_TRANSACTION_PIN',
+      message: 'The transaction PIN provided is incorrect.',
     });
   }
 
@@ -184,7 +183,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({
     success: false,
     error: 'INTERNAL_SERVER_ERROR',
-    message: 'An unexpected database or server error occurred.',
+    message: err.message || 'An unexpected database or server error occurred.',
   });
 });
 
