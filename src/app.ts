@@ -1,17 +1,69 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { WalletService } from './services/wallet.service.js';
-import { WalletBaseError } from './errors/wallet.errors.js';
-import { prisma } from './config/db.js';
+import { WalletService } from './services/wallet';
+import { StrowalletService } from './services/strowallet.service';
+import webhookRoutes from './routes/webhook.routes';
+import { WalletBaseError } from './errors/wallet.errors';
+import { prisma } from './config/db';
 
 const app = express();
+
+app.use('/api/v1/webhooks', webhookRoutes);
 app.use(express.json());
 
-// 1. Health Check Endpoint
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'Nigerian VTU Platform API', timestamp: new Date() });
+  res.json({ status: 'ok', service: 'Nigerian VTU Platform API & Strowallet Engine', timestamp: new Date() });
 });
 
-// 2. Fetch User Wallet & Balance
+app.post('/api/v1/users/register', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { fullName, email, phone, password, transactionPin, bvn, nin } = req.body;
+
+    if (!fullName || !email || !phone || !password || !transactionPin) {
+      return res.status(400).json({
+        success: false,
+        error: 'MissingRequiredFields',
+        message: 'fullName, email, phone, password, and transactionPin are required.',
+      });
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        fullName,
+        email,
+        phone,
+        passwordHash: password,
+        transactionPinHash: transactionPin,
+      },
+    });
+
+    const virtualAccount = await StrowalletService.createVirtualAccount({
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      bvn,
+      nin,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'User registered and Virtual Bank Account generated successfully.',
+      data: {
+        user: {
+          id: user.id,
+          fullName: user.fullName,
+          email: user.email,
+          phone: user.phone,
+          status: user.status,
+        },
+        virtualAccount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/v1/wallet/:userId', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId } = req.params;
@@ -22,7 +74,6 @@ app.get('/api/v1/wallet/:userId', async (req: Request, res: Response, next: Next
   }
 });
 
-// 3. Fund Wallet (Credit Endpoint)
 app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId, amount, reference, description } = req.body;
@@ -39,7 +90,7 @@ app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: Next
       userId,
       amount: Number(amount),
       reference,
-      description: description || 'Wallet Funding via Virtual Account',
+      description: description || 'Wallet Funding',
     });
 
     return res.status(200).json({
@@ -52,7 +103,6 @@ app.post('/api/v1/wallet/credit', async (req: Request, res: Response, next: Next
   }
 });
 
-// 4. Purchase Data / Airtime VTU (Debit Endpoint)
 app.post('/api/v1/wallet/debit', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId, amount, reference, description, serviceType, network, phoneNumber, planId, providerUsed } = req.body;
@@ -65,7 +115,6 @@ app.post('/api/v1/wallet/debit', async (req: Request, res: Response, next: NextF
       });
     }
 
-    // Process wallet debit inside FOR UPDATE transaction
     const debitResult = await WalletService.debit({
       userId,
       amount: Number(amount),
@@ -73,7 +122,6 @@ app.post('/api/v1/wallet/debit', async (req: Request, res: Response, next: NextF
       description: description || `VTU ${serviceType} purchase for ${phoneNumber}`,
     });
 
-    // Create associated Transaction audit record
     const vtuTx = await prisma.transaction.create({
       data: {
         userId,
@@ -101,7 +149,6 @@ app.post('/api/v1/wallet/debit', async (req: Request, res: Response, next: NextF
   }
 });
 
-// 5. Ledger Entries Endpoint
 app.get('/api/v1/wallet/:walletId/ledger', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { walletId } = req.params;
@@ -115,7 +162,6 @@ app.get('/api/v1/wallet/:walletId/ledger', async (req: Request, res: Response, n
   }
 });
 
-// Centralized Structured Error Handling Middleware
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof WalletBaseError) {
     return res.status(err.statusCode).json({
@@ -126,7 +172,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  // Handle Prisma Database Unique Constraint Violations
   if (err.code === 'P2002') {
     return res.status(409).json({
       success: false,

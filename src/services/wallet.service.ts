@@ -1,19 +1,19 @@
 import { Prisma, LedgerType, UserStatus } from '@prisma/client';
-import { prisma } from '../config/db.js';
+import { prisma } from '../config/db';
 import {
   DebitWalletParams,
   CreditWalletParams,
   WalletBalanceResult,
   WalletLockedRow,
   UserStatusLockedRow,
-} from '../types/wallet.js';
+} from '../types/wallet';
 import {
   InsufficientBalanceError,
   WalletNotFoundError,
   WalletSuspendedError,
   DuplicateReferenceError,
   InvalidAmountError,
-} from '../errors/wallet.errors.js';
+} from '../errors/wallet.errors';
 
 export class WalletService {
   /**
